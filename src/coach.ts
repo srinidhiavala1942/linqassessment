@@ -1,11 +1,10 @@
 import LinqAPIV3 from '@linqapp/sdk';
 import * as state from './state';
+import { getWorkout, formatWorkout, type Focus } from './workouts';
 import {
-    getWorkout, formatWorkout,
-    getLevelFromText, getGoalFromText,
-    getLocationFromText, getFocusFromText,
-    type Focus,
-} from './workouts';
+    parseActiveIntent, parseLocation, parseFocus, parseLevel, parseGoal,
+    generateWorkout as aiGenerateWorkout, generateNudge, answerFitnessQuestion,
+} from './ai';
 
 export async function handleEvent(linq: LinqAPIV3, event: any): Promise<void> {
     const type: string = event.event_type;
@@ -96,17 +95,17 @@ async function handleOnboarding(
         state.updateUser(phone, { name, onboardingStep: 'ASK_GOAL' });
         await showTyping(linq, chatId);
         await sendMessage(linq, chatId,
-            `${name}! Love it. Let us build your program 💪\n\nWhat is your main goal right now?\n\n1️⃣ Lose weight and burn fat\n2️⃣ Build muscle and get stronger\n3️⃣ Stay active and feel better\n4️⃣ Run faster and boost cardio\n\nJust type the number.`
+            `${name}! Love it. Let us build your program 💪\n\nWhat is your main goal right now?\n\n1️⃣ Lose weight and burn fat\n2️⃣ Build muscle and get stronger\n3️⃣ Stay active and feel better\n4️⃣ Run faster and boost cardio\n\nJust type the number or tell me in your own words.`
         );
         return;
     }
 
     if (step === 'ASK_GOAL') {
-        const goal = getGoalFromText(text);
+        const goal = await parseGoal(text);
 
-        if (!goal) {
+        if (goal === 'unknown') {
             await sendMessage(linq, chatId,
-                `Oops! That option does not exist 😅\n\nPick one of these:\n\n1️⃣ Lose weight and burn fat\n2️⃣ Build muscle and get stronger\n3️⃣ Stay active and feel better\n4️⃣ Run faster and boost cardio`
+                `Got it — can you pick one of these?\n\n1️⃣ Lose weight and burn fat\n2️⃣ Build muscle and get stronger\n3️⃣ Stay active and feel better\n4️⃣ Run faster and boost cardio`
             );
             return;
         }
@@ -126,10 +125,10 @@ async function handleOnboarding(
     }
 
     if (step === 'ASK_LEVEL') {
-        const level = getLevelFromText(text);
-        if (!level) {
+        const level = await parseLevel(text);
+        if (level === 'unknown') {
             await sendMessage(linq, chatId,
-                `Oops! That option does not exist 😅\n\nPick one:\n\n1️⃣ Beginner\n2️⃣ Intermediate\n3️⃣ Advanced`
+                `Can you pick one?\n\n1️⃣ Beginner\n2️⃣ Intermediate\n3️⃣ Advanced`
             );
             return;
         }
@@ -149,11 +148,11 @@ async function handleLocationAnswer(
     phone: string,
     text: string
 ): Promise<void> {
-    const location = getLocationFromText(text);
+    const location = await parseLocation(text);
 
-    if (!location) {
+    if (location === 'unknown') {
         await sendMessage(linq, chatId,
-            `Oops! That option does not exist 😅\n\nPick one of these:\n\n1️⃣ Home\n2️⃣ Gym`
+            `Home or gym today?\n\n1️⃣ Home\n2️⃣ Gym`
         );
         return;
     }
@@ -172,11 +171,11 @@ async function handleFocusAnswer(
     phone: string,
     text: string
 ): Promise<void> {
-    const focus = getFocusFromText(text);
+    const focus = await parseFocus(text);
 
-    if (!focus) {
+    if (focus === 'unknown') {
         await sendMessage(linq, chatId,
-            `Oops! That option does not exist 😅\n\nChoose from:\n\n1️⃣ Upper body\n2️⃣ Glutes\n3️⃣ Abs and core\n4️⃣ Cardio`
+            `What do you want to focus on?\n\n1️⃣ Upper body\n2️⃣ Glutes\n3️⃣ Abs and core\n4️⃣ Cardio`
         );
         return;
     }
@@ -210,8 +209,15 @@ async function handleFocusAnswer(
         : focus === 'glutes' ? user.glutesCompletions
         : focus === 'abs' ? user.absCompletions
         : user.cardioCompletions;
-    const workout = getWorkout(level, location, focus, focusCount);
-    const message = formatWorkout(workout);
+
+    // Try AI-generated workout first, fall back to static library
+    const aiWorkout = await aiGenerateWorkout({
+        level, location, focus,
+        goal: user.goal,
+        name: user.name,
+        history: user.workoutHistory,
+    });
+    const message = aiWorkout ?? formatWorkout(getWorkout(level, location, focus, focusCount));
 
     await showTyping(linq, chatId);
 
@@ -243,7 +249,6 @@ async function handleActiveUser(
     phone: string,
     text: string
 ): Promise<void> {
-    const t = text.toLowerCase();
     const today = new Date().toISOString().split('T')[0];
 
     // Lazy midnight reset — clear completedToday and lastSkipDay once the calendar day changes
@@ -253,81 +258,90 @@ async function handleActiveUser(
         user = state.getUser(phone)!;
     }
 
-    if (t === 'help' || t === '?' || t.includes('what can') || t.includes('commands')) {
-        await sendMessage(linq, chatId,
-            `Here is what you can say 👇\n\n` +
-            `WORKOUT to get today's session\n` +
-            `DONE to log your workout complete ✅\n` +
-            `SKIP to log a rest day\n` +
-            `STATS to see your streak and totals\n` +
-            `PAUSE to pause daily messages\n` +
-            `RESUME to resume after a pause\n\n` +
-            `Or just reply naturally, I will figure it out 💬`
-        );
-        return;
-    }
+    const intent = await parseActiveIntent(text);
 
-    if (t.includes('done') || t.includes('finished') || t.includes('complete') || t.includes('did it') || t.includes('crushed') || t === '❤️' || t === '🩷' || t === '💪' || t === '✅') {
-        await onWorkoutCompleted(linq, user, chatId, phone);
-        return;
-    }
+    switch (intent) {
+        case 'help':
+            await sendMessage(linq, chatId,
+                `Here is what you can say 👇\n\n` +
+                `WORKOUT to get today's session\n` +
+                `DONE to log your workout complete ✅\n` +
+                `SKIP to log a rest day\n` +
+                `STATS to see your streak and totals\n` +
+                `PAUSE to pause daily messages\n` +
+                `RESUME to resume after a pause\n\n` +
+                `Or just reply naturally, I will figure it out 💬`
+            );
+            return;
 
-    if (t.includes('override')) {
-        state.updateUser(phone, { status: 'AWAITING_FOCUS' });
-        await sendMessage(linq, chatId,
-            `Your call! 💪 Which focus do you want?\n\n1️⃣ Upper body\n2️⃣ Glutes\n3️⃣ Abs and core\n4️⃣ Cardio`
-        );
-        const updated = state.getUser(phone);
-        if (updated) {
-            const yesterday = new Date();
-            yesterday.setDate(yesterday.getDate() - 1);
-            const yDate = yesterday.toISOString().split('T')[0];
-            state.updateUser(phone, {
-                workoutHistory: updated.workoutHistory.filter(h => h.date !== yDate),
-            });
-        }
-        return;
-    }
+        case 'done':
+            await onWorkoutCompleted(linq, user, chatId, phone);
+            return;
 
-    if (t.includes('skip') || t.includes('rest') || t.includes('cant') || t.includes("can't") || t.includes('not today')) {
-        await onWorkoutSkipped(linq, user, chatId, phone);
-        return;
-    }
+        case 'override':
+            state.updateUser(phone, { status: 'AWAITING_FOCUS' });
+            await sendMessage(linq, chatId,
+                `Your call! 💪 Which focus do you want?\n\n1️⃣ Upper body\n2️⃣ Glutes\n3️⃣ Abs and core\n4️⃣ Cardio`
+            );
+            const updated = state.getUser(phone);
+            if (updated) {
+                const yesterday = new Date();
+                yesterday.setDate(yesterday.getDate() - 1);
+                const yDate = yesterday.toISOString().split('T')[0];
+                state.updateUser(phone, {
+                    workoutHistory: updated.workoutHistory.filter(h => h.date !== yDate),
+                });
+            }
+            return;
 
-    if (t.includes('pause') || t.includes('stop') || t.includes('break')) {
-        state.updateUser(phone, { status: 'PAUSED' });
-        await sendMessage(linq, chatId, `Paused. 🤙\n\nText RESUME when you are ready to get back at it.`);
-        return;
-    }
+        case 'skip':
+            await onWorkoutSkipped(linq, user, chatId, phone);
+            return;
 
-    if (t.includes('resume') || t.includes('start') || t.includes('back') || t.includes('ready')) {
-        state.updateUser(phone, { status: 'AWAITING_LOCATION' });
-        await sendMessage(linq, chatId, `Welcome back! 🔥\n\nHome or gym today?\n\n1️⃣ Home\n2️⃣ Gym`);
-        return;
-    }
+        case 'pause':
+            state.updateUser(phone, { status: 'PAUSED' });
+            await sendMessage(linq, chatId, `Paused. 🤙\n\nText RESUME when you are ready to get back at it.`);
+            return;
 
-    if (t.includes('workout') || t.includes('today') || t.includes('send') || t.includes('new')) {
-        if (user.completedToday) {
-            await sendMessage(linq, chatId, `You already crushed today's workout 💪 Come back tomorrow for your next session.`);
+        case 'resume':
+            state.updateUser(phone, { status: 'AWAITING_LOCATION' });
+            await sendMessage(linq, chatId, `Welcome back! 🔥\n\nHome or gym today?\n\n1️⃣ Home\n2️⃣ Gym`);
+            return;
+
+        case 'workout':
+            if (user.completedToday) {
+                await sendMessage(linq, chatId, `You already crushed today's workout 💪 Come back tomorrow for your next session.`);
+                return;
+            }
+            state.updateUser(phone, { status: 'AWAITING_LOCATION' });
+            await sendMessage(linq, chatId, `Let us go! 💪\n\nHome or gym today?\n\n1️⃣ Home\n2️⃣ Gym`);
+            return;
+
+        case 'stats': {
+            const name = user.name ?? 'you';
+            await sendMessage(linq, chatId,
+                `📊 ${name} Show Up Stats\n\n🔥 Streak: ${user.streakDays} days\n✅ Total sessions: ${user.totalCompletions}\n📅 This week: ${user.weeklyCompletions}\n\nShowing up beats being perfect every time.`
+            );
             return;
         }
-        state.updateUser(phone, { status: 'AWAITING_LOCATION' });
-        await sendMessage(linq, chatId, `Let us go! 💪\n\nHome or gym today?\n\n1️⃣ Home\n2️⃣ Gym`);
-        return;
-    }
 
-    if (t.includes('stats') || t.includes('streak') || t.includes('progress') || t.includes('how am i')) {
-        const name = user.name ?? 'you';
-        await sendMessage(linq, chatId,
-            `📊 ${name} Show Up Stats\n\n🔥 Streak: ${user.streakDays} days\n✅ Total sessions: ${user.totalCompletions}\n📅 This week: ${user.weeklyCompletions}\n\nShowing up beats being perfect every time.`
-        );
-        return;
-    }
+        case 'question': {
+            await showTyping(linq, chatId);
+            const answer = await answerFitnessQuestion(text, {
+                name: user.name,
+                level: user.level,
+                goal: user.goal,
+            });
+            await sendMessage(linq, chatId, answer);
+            return;
+        }
 
-    await showTyping(linq, chatId);
-    await sendMessage(linq, chatId,
-        `Reply DONE when you finish, SKIP to rest, or WORKOUT to get a new session 💪`
-    );
+        default:
+            await showTyping(linq, chatId);
+            await sendMessage(linq, chatId,
+                `Reply DONE when you finish, SKIP to rest, or WORKOUT to get a new session 💪`
+            );
+    }
 }
 
 async function handlePausedUser(
@@ -337,9 +351,9 @@ async function handlePausedUser(
     phone: string,
     text: string
 ): Promise<void> {
-    const t = text.toLowerCase();
+    const intent = await parseActiveIntent(text);
 
-    if (t.includes('resume') || t.includes('start') || t.includes('back') || t.includes('ready') || t.includes('yes') || t.includes('workout')) {
+    if (intent === 'resume' || intent === 'workout') {
         state.updateUser(phone, { status: 'AWAITING_LOCATION' });
         await showTyping(linq, chatId);
         await sendMessage(linq, chatId,
@@ -348,7 +362,14 @@ async function handlePausedUser(
         return;
     }
 
-    if (t === 'help' || t === '?') {
+    if (intent === 'stats') {
+        await sendMessage(linq, chatId,
+            `📊 Stats\n\n🔥 Streak: ${user.streakDays} days\n✅ Total: ${user.totalCompletions}\n\nText RESUME to get back at it 💪`
+        );
+        return;
+    }
+
+    if (intent === 'help') {
         await sendMessage(linq, chatId,
             `Your workouts are paused. 😴\n\nText RESUME to get back at it 💪\nText STATS to see your progress 📊`
         );
@@ -482,10 +503,14 @@ async function onMessageRead(linq: LinqAPIV3, event: any): Promise<void> {
         console.log(`[nudge] Sending nudge to ${user.phone}`);
         state.updateUser(user.phone, { nudgeSent: true });
 
+        const nudge = await generateNudge({
+            name: current.name,
+            streakDays: current.streakDays,
+            focus: current.focus,
+        });
+
         await showTyping(linq, chatId);
-        await sendMessage(linq, chatId,
-            `Hey! I can see today's workout landed. 👀\n\nYou still showing up today?\n\nEven 20 minutes counts. Reply DONE when finished, or SKIP if you need the rest.`
-        );
+        await sendMessage(linq, chatId, nudge);
     }, NUDGE_DELAY_MS);
 
     state.updateUser(user.phone, { nudgeTimer: timer });
