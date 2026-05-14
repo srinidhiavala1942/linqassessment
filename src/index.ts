@@ -3,7 +3,7 @@ import express from 'express';
 import crypto from 'crypto';
 import cron from 'node-cron';
 import LinqAPIV3 from '@linqapp/sdk';
-import { handleEvent, askDailyWorkout } from './coach';
+import { handleEvent, askDailyWorkout, sendWeeklySummaries } from './coach';
 import { getAllActiveUsers, resetAllWeeklyCompletions } from './state';
 
 const required = ['LINQ_API_KEY', 'LINQ_PHONE_NUMBER'];
@@ -90,9 +90,10 @@ function verifySignature(rawBody: string, timestamp: string, signature: string):
     }
 }
 
-// Monday midnight — reset weekly completion counts
-cron.schedule('0 0 * * 1', () => {
-    console.log('\n[cron] 🗓️  Monday midnight — resetting weekly completions');
+// Monday midnight — send weekly summaries then reset counts
+cron.schedule('0 0 * * 1', async () => {
+    console.log('\n[cron] 🗓️  Monday midnight — sending weekly summaries');
+    await sendWeeklySummaries(linq);
     resetAllWeeklyCompletions();
 });
 

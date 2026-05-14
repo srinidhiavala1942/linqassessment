@@ -263,6 +263,70 @@ export async function answerFitnessQuestion(question: string, params: {
     }
 }
 
+export async function checkLevelProgression(params: {
+    name?: string;
+    currentLevel: Level;
+    totalCompletions: number;
+    streakDays: number;
+    weeklyCompletions: number;
+}): Promise<string | null> {
+    if (!process.env.ANTHROPIC_API_KEY) return null;
+
+    const nextLevel = params.currentLevel === 'beginner' ? 'intermediate' : 'advanced';
+
+    try {
+        const res = await anthropic.messages.create({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 120,
+            system: `You are Show Up, an iMessage fitness coach. Write a short 3-line message suggesting the user is ready to level up their workouts. Be encouraging but not over the top. End with: "Reply YES to level up or NO to stay where you are."`,
+            messages: [{
+                role: 'user',
+                content: `User${params.name ? ` ${params.name}` : ''} has completed ${params.totalCompletions} workouts total, has a ${params.streakDays}-day streak, and averages ${params.weeklyCompletions} sessions per week. They are currently ${params.currentLevel}. Write the level-up suggestion to move them to ${nextLevel}.`,
+            }],
+        });
+        return (res.content[0] as Anthropic.TextBlock).text.trim();
+    } catch {
+        return null;
+    }
+}
+
+export async function generateWeeklySummary(params: {
+    name?: string;
+    weeklyCompletions: number;
+    streakDays: number;
+    totalCompletions: number;
+    level?: string;
+    workoutHistory: Array<{ date: string; focus: string; location: string }>;
+}): Promise<string> {
+    const focusCounts = params.workoutHistory.reduce((acc, h) => {
+        acc[h.focus] = (acc[h.focus] ?? 0) + 1;
+        return acc;
+    }, {} as Record<string, number>);
+
+    const focusSummary = Object.entries(focusCounts)
+        .map(([f, c]) => `${f} x${c}`)
+        .join(', ') || 'none logged';
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+        return `Weekly recap${params.name ? ` for ${params.name}` : ''} 📊\n\n${params.weeklyCompletions} sessions this week\nFocuses: ${focusSummary}\nStreak: ${params.streakDays} days\nTotal: ${params.totalCompletions} sessions\n\nNew week, new chance to show up 💪`;
+    }
+
+    try {
+        const res = await anthropic.messages.create({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 150,
+            system: `You are Show Up, an iMessage fitness coach. Write a short weekly recap message (4-5 lines max). Be personal, warm, and direct. Include the stats naturally. End with a one-line motivation for the new week. No markdown.`,
+            messages: [{
+                role: 'user',
+                content: `${params.name ? `User: ${params.name}\n` : ''}Sessions this week: ${params.weeklyCompletions}\nFocuses hit: ${focusSummary}\nCurrent streak: ${params.streakDays} days\nTotal all-time: ${params.totalCompletions}\nLevel: ${params.level ?? 'unknown'}`,
+            }],
+        });
+        return (res.content[0] as Anthropic.TextBlock).text.trim();
+    } catch {
+        return `Weekly recap 📊\n\n${params.weeklyCompletions} sessions this week\nFocuses: ${focusSummary}\nStreak: ${params.streakDays} days\nTotal: ${params.totalCompletions}\n\nNew week, new chance to show up 💪`;
+    }
+}
+
 // Static fallbacks — used when ANTHROPIC_API_KEY is not set or a Claude call fails
 
 function fallbackActive(text: string): ActiveIntent {

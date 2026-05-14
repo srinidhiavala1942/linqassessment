@@ -49,6 +49,7 @@ export interface UserState {
     nudgeTimer?: ReturnType<typeof setTimeout>;
 
     lastSkipDay?: string;
+    levelUpPending?: boolean;
 }
 
 const users = new Map<string, UserState>();

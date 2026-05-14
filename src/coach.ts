@@ -4,6 +4,7 @@ import { getWorkout, formatWorkout, type Focus } from './workouts';
 import {
     parseActiveIntent, parseLocation, parseFocus, parseLevel, parseGoal,
     generateWorkout as aiGenerateWorkout, generateNudge, answerFitnessQuestion,
+    checkLevelProgression, generateWeeklySummary,
 } from './ai';
 import { getWeather, weatherSummary } from './weather';
 
@@ -280,6 +281,29 @@ async function handleActiveUser(
         user = state.getUser(phone)!;
     }
 
+    // Handle pending level-up confirmation before anything else
+    if (user.levelUpPending) {
+        const t = text.toLowerCase();
+        const confirmed = t.includes('yes') || t.includes('yeah') || t.includes('sure') || t === 'y';
+        const declined = t.includes('no') || t.includes('nope') || t.includes('stay') || t === 'n';
+
+        if (confirmed || declined) {
+            state.updateUser(phone, { levelUpPending: false });
+            if (confirmed && user.level) {
+                const nextLevel = user.level === 'beginner' ? 'intermediate' : 'advanced';
+                state.updateUser(phone, { level: nextLevel });
+                await sendMessage(linq, chatId,
+                    `Level up confirmed. You are now ${nextLevel}. 🔥\n\nYour workouts just got harder — that is the point. Text WORKOUT when you are ready.`
+                );
+            } else {
+                await sendMessage(linq, chatId,
+                    `No problem — staying at ${user.level} for now. Keep showing up and we will check again soon 💪`
+                );
+            }
+            return;
+        }
+    }
+
     const intent = await parseActiveIntent(text);
 
     switch (intent) {
@@ -478,6 +502,26 @@ async function onWorkoutCompleted(
     } else {
         await sendMessage(linq, chatId, `You showed up. ✅\n\nDay 1 is the most important one.\n\nText WORKOUT when you are ready for your next session 💪`);
     }
+
+    // Check for level progression at milestone completions
+    const freshUser = state.getUser(phone);
+    if (freshUser && freshUser.level && freshUser.level !== 'advanced' && !freshUser.levelUpPending) {
+        const threshold = freshUser.level === 'beginner' ? 10 : 20;
+        if (newTotal === threshold) {
+            const suggestion = await checkLevelProgression({
+                name: freshUser.name,
+                currentLevel: freshUser.level,
+                totalCompletions: newTotal,
+                streakDays: newStreak,
+                weeklyCompletions: newWeekly,
+            });
+            if (suggestion) {
+                state.updateUser(phone, { levelUpPending: true });
+                await delay(800);
+                await sendMessage(linq, chatId, suggestion);
+            }
+        }
+    }
 }
 
 async function onWorkoutSkipped(
@@ -580,6 +624,29 @@ async function showTyping(linq: LinqAPIV3, chatId: string): Promise<void> {
 
 function delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export async function sendWeeklySummaries(linq: LinqAPIV3): Promise<void> {
+    const activeUsers = state.getAllActiveUsers();
+    for (const user of activeUsers) {
+        if (user.weeklyCompletions === 0) continue;
+        try {
+            const summary = await generateWeeklySummary({
+                name: user.name,
+                weeklyCompletions: user.weeklyCompletions,
+                streakDays: user.streakDays,
+                totalCompletions: user.totalCompletions,
+                level: user.level,
+                workoutHistory: user.workoutHistory,
+            });
+            await showTyping(linq, user.chatId);
+            await sendMessage(linq, user.chatId, summary);
+            console.log(`[cron] Weekly summary sent to ${user.phone}`);
+        } catch (err) {
+            console.error(`[cron] Failed to send weekly summary to ${user.phone}:`, err);
+        }
+        await delay(500);
+    }
 }
 
 export async function askDailyWorkout(linq: LinqAPIV3, user: state.UserState): Promise<void> {
