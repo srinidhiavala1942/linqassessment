@@ -74,7 +74,7 @@ async function onMessageReceived(linq: LinqAPIV3, event: any): Promise<void> {
 async function sendWelcome(linq: LinqAPIV3, chatId: string, phone: string): Promise<void> {
     await showTyping(linq, chatId);
     await sendMessage(linq, chatId,
-        `Heyyy! Welcome to Show Up 🎉\n\nFirst, give yourself credit for showing up today. That already puts you ahead of most people.\n\nI am your AI fitness coach. I will send you a workout every day, track your streak, and check in if life gets in the way.\n\nWhat is your name?`
+        `Hey! Welcome to Show Up 🎉\n\nGlad you are here. Text me when you want to work out and I will take care of the rest. I will track your streak, send daily workouts, and check in if you go quiet.\n\nWhat is your name?`
     );
     state.updateUser(phone, { onboardingStep: 'ASK_NAME' });
 }
@@ -107,7 +107,7 @@ async function handleOnboarding(
 
         if (goal === 'unknown') {
             await sendMessage(linq, chatId,
-                `Got it — can you pick one of these?\n\n1️⃣ Lose weight and burn fat\n2️⃣ Build muscle and get stronger\n3️⃣ Stay active and feel better\n4️⃣ Run faster and boost cardio`
+                `Got it, which one is closest?\n\n1️⃣ Lose weight and burn fat\n2️⃣ Build muscle and get stronger\n3️⃣ Stay active and feel better\n4️⃣ Run faster and boost cardio`
             );
             return;
         }
@@ -137,7 +137,7 @@ async function handleOnboarding(
         state.updateUser(phone, { level, onboardingStep: 'ASK_CITY' });
         await showTyping(linq, chatId);
         await sendMessage(linq, chatId,
-            `Last one — what city are you in? I will factor in the weather when planning your workouts 🌤️`
+            `Last thing, what city are you in? I will factor in the weather when planning your workouts 🌤️`
         );
         return;
     }
@@ -293,11 +293,11 @@ async function handleActiveUser(
                 const nextLevel = user.level === 'beginner' ? 'intermediate' : 'advanced';
                 state.updateUser(phone, { level: nextLevel });
                 await sendMessage(linq, chatId,
-                    `Level up confirmed. You are now ${nextLevel}. 🔥\n\nYour workouts just got harder — that is the point. Text WORKOUT when you are ready.`
+                    `Level up confirmed. You are now ${nextLevel}. 🔥\n\nYour workouts just got harder. That is the point. Text WORKOUT when you are ready.`
                 );
             } else {
                 await sendMessage(linq, chatId,
-                    `No problem — staying at ${user.level} for now. Keep showing up and we will check again soon 💪`
+                    `No problem, staying at ${user.level} for now. Keep showing up and we will check back in soon 💪`
                 );
             }
             return;
@@ -449,7 +449,7 @@ async function onWorkoutCompleted(
 
     if (current.lastSkipDay === today) {
         await sendMessage(linq, chatId,
-            `You marked today as a rest day 😴\n\nRest up — come back tomorrow to keep the streak going 💪`
+            `You marked today as a rest day 😴\n\nRest up. Come back tomorrow and keep the streak going 💪`
         );
         return;
     }
