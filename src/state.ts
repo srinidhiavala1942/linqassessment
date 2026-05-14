@@ -1,6 +1,6 @@
 // src/state.ts
 
-export type OnboardingStep = 'ASK_NAME' | 'ASK_GOAL' | 'ASK_LEVEL' | 'ASK_LOCATION' | 'ASK_FOCUS' | 'DONE';
+export type OnboardingStep = 'ASK_NAME' | 'ASK_GOAL' | 'ASK_LEVEL' | 'ASK_CITY' | 'ASK_LOCATION' | 'ASK_FOCUS' | 'DONE';
 export type FitnessLevel = 'beginner' | 'intermediate' | 'advanced';
 export type FitnessGoal = 'lose_weight' | 'build_muscle' | 'stay_active' | 'run_faster';
 export type WorkoutLocation = 'home' | 'gym';
@@ -10,6 +10,7 @@ export interface UserState {
     phone: string;
     chatId: string;
     name?: string;
+    city?: string;
     goal?: FitnessGoal;
     level?: FitnessLevel;
 

@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { Focus, Level, Location } from './workouts';
+import type { WeatherContext } from './weather';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -149,6 +150,7 @@ export async function generateWorkout(params: {
     goal?: string;
     name?: string;
     history: Array<{ date: string; focus: string; location: string }>;
+    weather?: WeatherContext | null;
 }): Promise<string | null> {
     if (!process.env.ANTHROPIC_API_KEY) return null;
 
@@ -160,11 +162,16 @@ export async function generateWorkout(params: {
     const equipment = params.location === 'home' ? 'bodyweight only — no gym equipment' : 'full gym access with machines and free weights';
     const recentFocuses = params.history.slice(0, 3).map(h => h.focus).join(', ') || 'none yet';
 
+    const weatherLine = params.weather
+        ? `Current weather: ${params.weather.temp}°C (feels like ${params.weather.feelsLike}°C), ${params.weather.description}. ${params.weather.isGoodOutdoor ? 'Good conditions for outdoor activity.' : 'Not ideal for outdoor activity.'}`
+        : '';
+
     const prompt = `Generate a ${params.level} ${focusLabel} workout.
 Location: ${params.location} (${equipment})
 Goal: ${goalLabel}
-Recent sessions: ${recentFocuses}${params.name ? `\nUser: ${params.name}` : ''}
+Recent sessions: ${recentFocuses}${params.name ? `\nUser: ${params.name}` : ''}${weatherLine ? `\n${weatherLine}` : ''}
 
+${weatherLine ? `If the focus is cardio and outdoor conditions are good, naturally suggest taking it outside. If it is hot (above 28°C), mention hydration. If it is cold or raining, keep everything indoors. Otherwise just factor weather into the tip or benefit line if relevant.\n` : ''}
 Use this EXACT format — no deviations:
 
 ${emoji} [Workout Title] ([Duration])

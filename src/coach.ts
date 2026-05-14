@@ -5,6 +5,7 @@ import {
     parseActiveIntent, parseLocation, parseFocus, parseLevel, parseGoal,
     generateWorkout as aiGenerateWorkout, generateNudge, answerFitnessQuestion,
 } from './ai';
+import { getWeather, weatherSummary } from './weather';
 
 export async function handleEvent(linq: LinqAPIV3, event: any): Promise<void> {
     const type: string = event.event_type;
@@ -132,10 +133,28 @@ async function handleOnboarding(
             );
             return;
         }
-        state.updateUser(phone, { level, status: 'AWAITING_LOCATION', onboardingStep: 'ASK_LOCATION' });
+        state.updateUser(phone, { level, onboardingStep: 'ASK_CITY' });
         await showTyping(linq, chatId);
         await sendMessage(linq, chatId,
-            `Perfect. Let us get you your first workout 🚀\n\nAre you working out at home or the gym today?\n\n1️⃣ Home\n2️⃣ Gym`
+            `Last one — what city are you in? I will factor in the weather when planning your workouts 🌤️`
+        );
+        return;
+    }
+
+    if (step === 'ASK_CITY') {
+        const city = text.trim();
+        if (!city || city.length < 2) {
+            await sendMessage(linq, chatId, `Just type your city name and we are good to go 🌍`);
+            return;
+        }
+        const weather = await getWeather(city);
+        const weatherLine = weather
+            ? `Right now it is ${weatherSummary(weather)} in ${weather.city}. `
+            : '';
+        state.updateUser(phone, { city, status: 'AWAITING_LOCATION', onboardingStep: 'ASK_LOCATION' });
+        await showTyping(linq, chatId);
+        await sendMessage(linq, chatId,
+            `${weatherLine}Let us get you your first workout 🚀\n\nHome or gym today?\n\n1️⃣ Home\n2️⃣ Gym`
         );
         return;
     }
@@ -210,12 +229,15 @@ async function handleFocusAnswer(
         : focus === 'abs' ? user.absCompletions
         : user.cardioCompletions;
 
+    const weather = user.city ? await getWeather(user.city) : null;
+
     // Try AI-generated workout first, fall back to static library
     const aiWorkout = await aiGenerateWorkout({
         level, location, focus,
         goal: user.goal,
         name: user.name,
         history: user.workoutHistory,
+        weather,
     });
     const message = aiWorkout ?? formatWorkout(getWorkout(level, location, focus, focusCount));
 
@@ -562,8 +584,12 @@ function delay(ms: number): Promise<void> {
 
 export async function askDailyWorkout(linq: LinqAPIV3, user: state.UserState): Promise<void> {
     state.updateUser(user.phone, { status: 'AWAITING_LOCATION' });
+
+    const weather = user.city ? await getWeather(user.city) : null;
+    const weatherLine = weather ? `${weatherSummary(weather)} in ${weather.city} today. ` : '';
+
     await showTyping(linq, user.chatId);
     await sendMessage(linq, user.chatId,
-        `Good morning! Time to show up 💪\n\nHome or gym today?\n\n1️⃣ Home\n2️⃣ Gym`
+        `Good morning! ${weatherLine}Time to show up 💪\n\nHome or gym today?\n\n1️⃣ Home\n2️⃣ Gym`
     );
 }
